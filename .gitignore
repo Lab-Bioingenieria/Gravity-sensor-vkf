@@ -1,0 +1,6 @@
+*.swp
+*.gch
+*.o
+test/test_emg
+# Local Pi runtime state
+.atl/

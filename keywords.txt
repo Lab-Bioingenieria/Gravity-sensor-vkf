@@ -1,0 +1,60 @@
+#######################################
+# Syntax Coloring Map for EMGFilters
+#######################################
+
+#######################################
+# Datatypes (KEYWORD1)
+#######################################
+
+EMGFilters	KEYWORD1
+EMGProcessor	KEYWORD1
+EMGCalibration	KEYWORD1
+EMGConfig	KEYWORD1
+FILTER_2nd	KEYWORD1
+FILTER_4th	KEYWORD1
+
+#######################################
+# Methods and Functions (KEYWORD2)
+#######################################
+
+init	KEYWORD2
+update	KEYWORD2
+updateFloat	KEYWORD2
+reset	KEYWORD2
+resetAll	KEYWORD2
+isBypassed	KEYWORD2
+settlingSamples	KEYWORD2
+sampleFrequency	KEYWORD2
+begin	KEYWORD2
+setConfig	KEYWORD2
+startRestCalibration	KEYWORD2
+startMvcCalibration	KEYWORD2
+cancelCalibration	KEYWORD2
+progressPercent	KEYWORD2
+isCalibrated	KEYWORD2
+raw	KEYWORD2
+filtered	KEYWORD2
+envelope	KEYWORD2
+activation	KEYWORD2
+isActive	KEYWORD2
+threshold	KEYWORD2
+dcBias	KEYWORD2
+calibration	KEYWORD2
+setCalibration	KEYWORD2
+
+#######################################
+# Constants (LITERAL1)
+#######################################
+
+NOTCH_FREQ_50HZ	LITERAL1
+NOTCH_FREQ_60HZ	LITERAL1
+SAMPLE_FREQ_500HZ	LITERAL1
+SAMPLE_FREQ_1000HZ	LITERAL1
+FILTER_TYPE_LOWPASS	LITERAL1
+FILTER_TYPE_HIGHPASS	LITERAL1
+EMG_CAL_UNCALIBRATED	LITERAL1
+EMG_CAL_SETTLING	LITERAL1
+EMG_CAL_REST	LITERAL1
+EMG_CAL_REST_DONE	LITERAL1
+EMG_CAL_MVC	LITERAL1
+EMG_CAL_READY	LITERAL1
