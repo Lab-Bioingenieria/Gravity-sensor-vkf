@@ -1,0 +1,1029 @@
+/*
+ * ESP32-S3 RECEIVER
+ *
+ * ESP-NOW -> Dashboard web
+ *
+ * Compatible con el transmisor C3 actual:
+ *
+ * typedef struct {
+ *     float ch0;
+ *     float ch1;
+ *     float ch2;
+ * } EMGData;
+ *
+ * Tamaño del paquete: 12 bytes.
+ *
+ * SERIAL:
+ *   Solo números para Serial Plotter:
+ *
+ *   ch0    ch1    ch2
+ *
+ *   Ejemplo:
+ *   0.123  0.087  0.241
+ *
+ * No se imprimen etiquetas, textos ni contadores durante
+ * la recepción de datos.
+ *
+ * DASHBOARD:
+ *   http://192.168.4.1
+ *
+ * WIFI:
+ *   SSID: EMG-Dashboard
+ *   Password: emg12345
+ *
+ * CANAL:
+ *   1
+ */
+
+#include <Arduino.h>
+#include <WiFi.h>
+#include <esp_now.h>
+#include <WebServer.h>
+
+
+// ================================================================
+// WIFI ACCESS POINT
+// ================================================================
+
+const char *AP_SSID = "EMG-Dashboard";
+
+const char *AP_PASSWORD = "emg12345";
+
+const uint8_t AP_CHANNEL = 1;
+
+
+// ================================================================
+// ESTRUCTURA EXACTAMENTE IGUAL AL TRANSMISOR
+// ================================================================
+
+typedef struct {
+
+    float ch0;
+
+    float ch1;
+
+    float ch2;
+
+} EMGData;
+
+typedef struct {
+
+    uint8_t type;
+
+    uint8_t channel;
+
+    float rest;
+
+    float mvc;
+
+    float onset;
+
+} CalibrationData;
+
+enum CalibrationEvent : uint8_t {
+    CAL_START_REST = 1,
+    CAL_REST_DONE  = 2,
+    CAL_START_MVC  = 3,
+    CAL_CHANNEL_DONE = 4,
+    CAL_FAILED = 5,
+    CAL_DONE = 6
+};
+
+
+// ================================================================
+// DATOS EMG
+// ================================================================
+
+volatile float ch0 = 0.0f;
+
+volatile float ch1 = 0.0f;
+
+volatile float ch2 = 0.0f;
+
+volatile bool calibrating = false;
+volatile uint8_t calibrationType = 0;
+volatile uint8_t calibrationChannel = 0;
+volatile float calibrationRest = 0.0f;
+volatile float calibrationMvc = 0.0f;
+volatile float calibrationOnset = 0.0f;
+
+
+// ================================================================
+// SERVIDOR WEB
+// ================================================================
+
+WebServer server(80);
+
+
+// ================================================================
+// DASHBOARD HTML
+// ================================================================
+
+const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
+
+<!DOCTYPE html>
+
+<html lang="es">
+
+<head>
+
+<meta charset="UTF-8">
+
+<meta name="viewport"
+      content="width=device-width, initial-scale=1">
+
+<title>Dashboard sEMG</title>
+
+
+<style>
+
+body {
+
+    font-family:
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        Arial,
+        sans-serif;
+
+    background: #111;
+
+    color: #eee;
+
+    margin: 0;
+
+    padding: 16px;
+
+}
+
+
+h1 {
+
+    font-size: 1.2rem;
+
+    font-weight: 600;
+
+    margin: 0 0 4px 0;
+
+}
+
+
+#conn {
+
+    font-size: 0.85rem;
+
+    margin-bottom: 16px;
+
+}
+
+
+#conn.ok {
+
+    color: #4ade80;
+
+}
+
+
+#conn.bad {
+
+    color: #f87171;
+
+}
+
+
+/* ============================================================
+   ESTADO
+   ============================================================ */
+
+#statusBanner {
+
+    background: #1b1b1b;
+
+    border: 1px solid #333;
+
+    border-radius: 8px;
+
+    padding: 10px 14px;
+
+    margin-bottom: 16px;
+
+    font-size: 0.95rem;
+
+    color: #aaa;
+
+}
+
+
+/* ============================================================
+   TARJETAS
+   ============================================================ */
+
+.card {
+
+    background: #1b1b1b;
+
+    border-radius: 10px;
+
+    padding: 12px 16px;
+
+    margin-bottom: 16px;
+
+}
+
+
+.card h2 {
+
+    font-size: 0.95rem;
+
+    margin: 0 0 8px 0;
+
+    color: #aaa;
+
+    font-weight: 500;
+
+}
+
+
+.val {
+
+    font-size: 1.6rem;
+
+    font-weight: 700;
+
+}
+
+
+canvas {
+
+    width: 100%;
+
+    height: 150px;
+
+    display: block;
+
+}
+
+</style>
+
+</head>
+
+
+<body>
+
+
+<h1>
+    Dashboard sEMG — 3 canales
+</h1>
+
+
+<div id="conn" class="bad">
+    conectando...
+</div>
+
+
+<div id="statusBanner">
+    Datos EMG en tiempo real
+</div>
+
+<div id="calibrationCard" class="card" style="display:none;">
+    <h2>Calibración</h2>
+    <div id="calibrationMessage" class="val" style="font-size:1.15rem;">
+        Calibrando...
+    </div>
+</div>
+
+
+<!-- ==========================================================
+     CANAL 0
+     ========================================================== -->
+
+<div class="card">
+
+    <h2>
+
+        Canal 0 —
+
+        <span id="v0" class="val">
+            0.000
+        </span>
+
+    </h2>
+
+
+    <canvas
+        id="c0"
+        width="600"
+        height="150">
+    </canvas>
+
+</div>
+
+
+<!-- ==========================================================
+     CANAL 1
+     ========================================================== -->
+
+<div class="card">
+
+    <h2>
+
+        Canal 1 —
+
+        <span id="v1" class="val">
+            0.000
+        </span>
+
+    </h2>
+
+
+    <canvas
+        id="c1"
+        width="600"
+        height="150">
+    </canvas>
+
+</div>
+
+
+<!-- ==========================================================
+     CANAL 2
+     ========================================================== -->
+
+<div class="card">
+
+    <h2>
+
+        Canal 2 —
+
+        <span id="v2" class="val">
+            0.000
+        </span>
+
+    </h2>
+
+
+    <canvas
+        id="c2"
+        width="600"
+        height="150">
+    </canvas>
+
+</div>
+
+
+<script>
+
+
+// ============================================================
+// CONFIGURACIÓN
+// ============================================================
+
+const MAX_POINTS = 100;
+
+const POLL_MS = 100;
+
+
+// ============================================================
+// BUFFERS
+// ============================================================
+
+const buffers = [
+
+    new Array(MAX_POINTS).fill(0),
+
+    new Array(MAX_POINTS).fill(0),
+
+    new Array(MAX_POINTS).fill(0)
+
+];
+
+
+const colors = [
+
+    '#38bdf8',
+
+    '#fbbf24',
+
+    '#a78bfa'
+
+];
+
+
+const canvases = [
+
+    document.getElementById('c0'),
+
+    document.getElementById('c1'),
+
+    document.getElementById('c2')
+
+];
+
+
+const valEls = [
+
+    document.getElementById('v0'),
+
+    document.getElementById('v1'),
+
+    document.getElementById('v2')
+
+];
+
+
+// ============================================================
+// DIBUJAR GRÁFICA
+// ============================================================
+
+function drawChart(canvas, data, color) {
+
+    const ctx =
+        canvas.getContext('2d');
+
+
+    const w =
+        canvas.width;
+
+
+    const h =
+        canvas.height;
+
+
+    ctx.clearRect(
+        0,
+        0,
+        w,
+        h
+    );
+
+
+    // --------------------------------------------------------
+    // GRID
+    // --------------------------------------------------------
+
+    ctx.strokeStyle =
+        '#2a2a2a';
+
+
+    ctx.lineWidth = 1;
+
+
+    for (
+        let g = 0;
+        g <= 4;
+        g++
+    ) {
+
+        const y =
+            (h / 4) * g;
+
+
+        ctx.beginPath();
+
+
+        ctx.moveTo(
+            0,
+            y
+        );
+
+
+        ctx.lineTo(
+            w,
+            y
+        );
+
+
+        ctx.stroke();
+
+    }
+
+
+    // --------------------------------------------------------
+    // LÍNEA DE DATOS
+    // --------------------------------------------------------
+
+    ctx.strokeStyle =
+        color;
+
+
+    ctx.lineWidth = 2;
+
+
+    ctx.beginPath();
+
+
+    const stepX =
+        w / (MAX_POINTS - 1);
+
+
+    data.forEach(
+        (v, i) => {
+
+            const x =
+                i * stepX;
+
+
+            const clamped =
+                Math.max(
+                    0,
+                    Math.min(
+                        1,
+                        v
+                    )
+                );
+
+
+            const y =
+                h -
+                clamped * h;
+
+
+            if (i === 0) {
+
+                ctx.moveTo(
+                    x,
+                    y
+                );
+
+            } else {
+
+                ctx.lineTo(
+                    x,
+                    y
+                );
+
+            }
+
+        }
+    );
+
+
+    ctx.stroke();
+
+
+    // --------------------------------------------------------
+    // RELLENO
+    // --------------------------------------------------------
+
+    ctx.lineTo(
+        w,
+        h
+    );
+
+
+    ctx.lineTo(
+        0,
+        h
+    );
+
+
+    ctx.closePath();
+
+
+    ctx.fillStyle =
+        color + '22';
+
+
+    ctx.fill();
+
+}
+
+
+// ============================================================
+// AGREGAR VALOR
+// ============================================================
+
+function pushValue(idx, val) {
+
+    if (
+        !Number.isFinite(val)
+    ) {
+
+        val = 0;
+
+    }
+
+
+    buffers[idx].push(
+        val
+    );
+
+
+    if (
+        buffers[idx].length >
+        MAX_POINTS
+    ) {
+
+        buffers[idx].shift();
+
+    }
+
+
+    drawChart(
+
+        canvases[idx],
+
+        buffers[idx],
+
+        colors[idx]
+
+    );
+
+
+    valEls[idx].textContent =
+        val.toFixed(3);
+
+}
+
+
+// ============================================================
+// ELEMENTOS DEL DASHBOARD
+// ============================================================
+
+const connEl =
+    document.getElementById(
+        'conn'
+    );
+
+const calibrationCard =
+    document.getElementById(
+        'calibrationCard'
+    );
+
+const calibrationMessage =
+    document.getElementById(
+        'calibrationMessage'
+    );
+
+
+// ============================================================
+// CONSULTAR DATOS
+// ============================================================
+
+async function poll() {
+
+    try {
+
+        const response =
+            await fetch(
+                '/data',
+                {
+                    cache: 'no-store'
+                }
+            );
+
+
+        if (!response.ok) {
+
+            throw new Error(
+                'HTTP ' +
+                response.status
+            );
+
+        }
+
+
+        const d =
+            await response.json();
+
+
+        // ====================================================
+        // ACTUALIZAR LA CALIBRACIÓN (SOLO CUANDO ESTÁ ACTIVA)
+        // ====================================================
+
+        if (d.calibrating) {
+            calibrationCard.style.display = 'block';
+            calibrationMessage.textContent = d.calibrationMessage;
+        } else {
+            calibrationCard.style.display = 'none';
+        }
+
+        // ====================================================
+        // ACTUALIZAR LAS 3 GRÁFICAS
+        // ====================================================
+
+        pushValue(
+            0,
+            d.ch0
+        );
+
+
+        pushValue(
+            1,
+            d.ch1
+        );
+
+
+        pushValue(
+            2,
+            d.ch2
+        );
+
+
+        // ====================================================
+        // CONEXIÓN
+        // ====================================================
+
+        connEl.textContent =
+            'conectado';
+
+
+        connEl.className =
+            'ok';
+
+
+    } catch (error) {
+
+        connEl.textContent =
+            'sin conexión, reintentando...';
+
+
+        connEl.className =
+            'bad';
+
+    }
+
+
+    setTimeout(
+        poll,
+        POLL_MS
+    );
+
+}
+
+
+// ============================================================
+// INICIAR DASHBOARD
+// ============================================================
+
+poll();
+
+
+</script>
+
+
+</body>
+
+</html>
+
+)rawliteral";
+
+
+// ================================================================
+// CALLBACK ESP-NOW
+// ================================================================
+
+void OnDataRecv(
+    const uint8_t *mac,
+    const uint8_t *data,
+    int len
+) {
+
+    // ============================================================
+    // PAQUETE EMG NORMAL: 12 bytes
+    // ============================================================
+    if (len == sizeof(EMGData)) {
+
+        EMGData receivedData;
+
+        memcpy(
+            &receivedData,
+            data,
+            sizeof(receivedData)
+        );
+
+        ch0 = receivedData.ch0;
+        ch1 = receivedData.ch1;
+        ch2 = receivedData.ch2;
+
+        // Mantener Serial Plotter limpio.
+        Serial.print(ch0, 3);
+        Serial.print('\t');
+        Serial.print(ch1, 3);
+        Serial.print('\t');
+        Serial.println(ch2, 3);
+
+        return;
+    }
+
+    // ============================================================
+    // PAQUETE DE CALIBRACIÓN: sizeof(CalibrationData)
+    // ============================================================
+    if (len == sizeof(CalibrationData)) {
+
+        CalibrationData receivedCalibration;
+
+        memcpy(
+            &receivedCalibration,
+            data,
+            sizeof(receivedCalibration)
+        );
+
+        calibrationType = receivedCalibration.type;
+        calibrationChannel = receivedCalibration.channel;
+        calibrationRest = receivedCalibration.rest;
+        calibrationMvc = receivedCalibration.mvc;
+        calibrationOnset = receivedCalibration.onset;
+
+        if (calibrationType == CAL_DONE) {
+            calibrating = false;
+        } else {
+            calibrating = true;
+        }
+
+        return;
+    }
+}
+
+
+// ================================================================
+// PÁGINA PRINCIPAL
+// ================================================================
+
+void handleRoot() {
+
+    server.send_P(
+        200,
+        "text/html",
+        DASHBOARD_HTML
+    );
+
+}
+
+
+// ================================================================
+// DATOS PARA EL DASHBOARD
+// ================================================================
+
+void handleData() {
+
+    char json[384];
+
+    float localCh0 = ch0;
+    float localCh1 = ch1;
+    float localCh2 = ch2;
+    bool localCalibrating = calibrating;
+    uint8_t localType = calibrationType;
+    uint8_t localChannel = calibrationChannel;
+    float localRest = calibrationRest;
+    float localMvc = calibrationMvc;
+    float localOnset = calibrationOnset;
+
+    char message[180] = "";
+
+    switch (localType) {
+        case CAL_START_REST:
+            snprintf(message, sizeof(message),
+                     "Paso 1/2: relaja todos los músculos y mantente quieto. Midiendo reposo.");
+            break;
+
+        case CAL_REST_DONE:
+            snprintf(message, sizeof(message),
+                     "Reposo capturado. Preparando la calibración de fuerza.");
+            break;
+
+        case CAL_START_MVC:
+            snprintf(message, sizeof(message),
+                     "Paso 2/2: contrae con fuerza el músculo del canal %u.",
+                     (unsigned)localChannel);
+            break;
+
+        case CAL_CHANNEL_DONE:
+            snprintf(message, sizeof(message),
+                     "Canal %u calibrado. Rest: %.2f | MVC: %.2f | Umbral: %.2f",
+                     (unsigned)localChannel,
+                     localRest, localMvc, localOnset);
+            break;
+
+        case CAL_FAILED:
+            snprintf(message, sizeof(message),
+                     "Canal %u: no se detectó contracción. Revisa los electrodos y reintenta.",
+                     (unsigned)localChannel);
+            break;
+
+        default:
+            snprintf(message, sizeof(message), "Calibrando...");
+            break;
+    }
+
+    snprintf(
+        json,
+        sizeof(json),
+        "{\"ch0\":%.3f,\"ch1\":%.3f,\"ch2\":%.3f,\"calibrating\":%s,\"calibrationMessage\":\"%s\"}",
+        localCh0,
+        localCh1,
+        localCh2,
+        localCalibrating ? "true" : "false",
+        message
+    );
+
+    server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    server.sendHeader("Pragma", "no-cache");
+    server.sendHeader("Expires", "0");
+
+    server.send(
+        200,
+        "application/json",
+        json
+    );
+}
+
+
+
+// ================================================================
+// SETUP
+// ================================================================
+
+void setup() {
+
+    Serial.begin(
+        115200
+    );
+
+
+    delay(1000);
+
+
+    // ============================================================
+    // WIFI
+    // ============================================================
+
+    WiFi.mode(
+        WIFI_AP_STA
+    );
+
+
+    // ============================================================
+    // ACCESS POINT
+    // ============================================================
+
+    WiFi.softAP(
+        AP_SSID,
+        AP_PASSWORD,
+        AP_CHANNEL
+    );
+
+
+    // ============================================================
+    // ESP-NOW
+    // ============================================================
+
+    if (
+        esp_now_init() != ESP_OK
+    ) {
+
+        return;
+
+    }
+
+
+    // ============================================================
+    // CALLBACK
+    // ============================================================
+
+    esp_now_register_recv_cb(
+        OnDataRecv
+    );
+
+
+    // ============================================================
+    // SERVIDOR WEB
+    // ============================================================
+
+    server.on(
+        "/",
+        HTTP_GET,
+        handleRoot
+    );
+
+
+    server.on(
+        "/data",
+        HTTP_GET,
+        handleData
+    );
+
+
+    server.begin();
+
+
+    // ============================================================
+    // IMPORTANTE:
+    //
+    // DESPUÉS DE AQUÍ NO SE IMPRIMEN MENSAJES DE TEXTO.
+    //
+    // El Serial queda reservado para Serial Plotter.
+    // ============================================================
+
+}
+
+
+// ================================================================
+// LOOP
+// ================================================================
+
+void loop() {
+
+    server.handleClient();
+
+}
